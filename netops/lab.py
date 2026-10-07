@@ -124,7 +124,13 @@ def try_flow(site: Site, flow: Flow, addresses: dict[str, str]) -> bool | None:
     dst_ip = addresses[flow.dst]
     if flow.proto == "icmp":
         return sh(src, f"ping -c 2 -W 1 {dst_ip}").returncode == 0
-    return sh(src, f"nc -z -w 2 {dst_ip} {flow.port}").returncode == 0
+    # Retry once: under load a first connect can time out (ARP, a busy runner).
+    # This can only turn a false "blocked" into "open"; a dropped SYN never
+    # connects, so a denied flow can't pass by retrying.
+    for _ in range(2):
+        if sh(src, f"nc -z -w 3 {dst_ip} {flow.port}").returncode == 0:
+            return True
+    return False
 
 
 def reachability(site: Site) -> list[Result]:
