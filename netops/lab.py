@@ -82,15 +82,35 @@ def bgp_established(router: str) -> bool:
     return bool(peers) and all(p.get("state") == "Established" for p in peers.values())
 
 
+def missing_routes(site: Site, router: str) -> list[str]:
+    """Expected prefixes that are not yet installed in this router's forwarding table.
+
+    "OSPF Full" and "BGP Established" are control-plane facts. Traffic needs the
+    resulting routes programmed into the kernel's forwarding table (FIB), which
+    can lag a moment behind; testing in that gap made the first flows fail.
+    """
+    plan = allocate(site)
+    expected = [str(s.network) for s in plan.segments] + [f"{ip}/32" for ip in plan.loopbacks.values()]
+    expected.append(str(site.internet) if router == site.edge_router else "0.0.0.0/0")
+    table = vtysh_json(router, "show ip route")
+    missing = []
+    for prefix in expected:
+        entries = table.get(prefix, [])
+        if not any(e.get("installed") or e.get("selected") and e.get("protocol") == "connected" for e in entries):
+            missing.append(prefix)
+    return missing
+
+
 def wait_converged(site: Site, timeout_s: float = 120) -> float:
     degree = {r: sum(r in link for link in site.links) for r in site.routers}
     start = time.monotonic()
     while time.monotonic() - start < timeout_s:
         ospf_ok = all(full_neighbors(r) == degree[r] for r in site.routers)
         if ospf_ok and bgp_established(site.edge_router):
-            return time.monotonic() - start
+            if not any(missing_routes(site, r) for r in site.routers):
+                return time.monotonic() - start
         time.sleep(2)
-    detail = {r: f"{full_neighbors(r)}/{degree[r]} OSPF Full" for r in site.routers}
+    detail = {r: f"{full_neighbors(r)}/{degree[r]} OSPF Full, missing {missing_routes(site, r)}" for r in site.routers}
     raise SystemExit(f"routing did not converge in {timeout_s:.0f}s: {detail}, BGP up: {bgp_established(site.edge_router)}")
 
 
@@ -191,7 +211,7 @@ def report(results: list[Result], converged_s: float, drill: dict) -> str:
     lines = [
         "## Lab verification",
         "",
-        f"- Routing converged in **{converged_s:.1f} s** (all OSPF adjacencies Full, eBGP Established).",
+        f"- Routing converged in **{converged_s:.1f} s** (all OSPF adjacencies Full, eBGP Established, every expected route installed).",
         f"- Flows tested on real packets: **{len(tested)}**; matching the policy: **{len(tested) - len(bad)}**.",
         f"- Failover drill: cut {drill['cut']}. Office lost the internet for "
         + (f"**{drill['outage_s']:.1f} s**" if drill["outage_s"] is not None else "**over 60 s (FAILED)**")
