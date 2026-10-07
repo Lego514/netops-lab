@@ -1,0 +1,48 @@
+# Source of truth for the lab site: a small fab with an office, servers, a
+# production (OT) network and a management network, behind one edge router.
+#
+# Everything else -- every IP address, every router config, every firewall rule,
+# the Containerlab topology and the IP plan in docs/ -- is generated from this
+# file by `python -m netops build`. Change the network here, never in the output.
+
+site:
+  name: newark-fab
+  asn: 65020
+  supernet: 10.20.0.0/16        # every internal address comes from here
+  loopbacks: 10.20.254.0/24     # one /32 per router (router IDs)
+  p2p: 10.20.255.0/24           # one /31 per router-to-router link
+
+isp:
+  name: isp
+  asn: 65000
+  link: 203.0.113.0/31          # documentation range (RFC 5737)
+  internet: 198.51.100.1/32     # stands in for "the internet" in the lab
+
+routers: [edge, core1, core2]
+edge_router: edge               # the router that peers with the ISP over BGP
+
+# Router-to-router links. All run OSPF area 0. The triangle means losing any
+# one link still leaves a path.
+links:
+  - [edge, core1]
+  - [edge, core2]
+  - [core1, core2]
+
+# One subnet per segment, sized from the host count. The router listed is the
+# segment's default gateway.
+segments:
+  - { name: office,  vlan: 10, hosts: 120, router: core1 }
+  - { name: servers, vlan: 30, hosts: 20,  router: core1 }
+  - { name: fab_ot,  vlan: 20, hosts: 60,  router: core2 }
+  - { name: mgmt,    vlan: 99, hosts: 10,  router: core2 }
+
+# Traffic between segments is denied unless a rule below allows it.
+policy:
+  allow:
+    - { from: office, to: servers, proto: tcp, ports: [22, 443] }   # SSH, internal web
+    - { from: office, to: fab_ot,  proto: tcp, ports: [443] }       # read-only MES dashboard
+    - { from: fab_ot, to: servers, proto: tcp, ports: [5432] }      # equipment data to the database
+    - { from: mgmt,   to: any,     proto: any }                     # network admins reach everything
+  # Segments allowed to reach the internet. fab_ot is not: production
+  # equipment never talks to the internet directly.
+  internet: [office, servers, mgmt]

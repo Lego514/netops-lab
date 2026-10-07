@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    name: Unit tests, policy check, generated files up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest -q
+      - name: Compiled firewall matches the policy
+        run: python -m netops check
+      - name: Docs are regenerated from the inventory
+        run: |
+          python -m netops build
+          git diff --exit-code docs/ || (echo "docs/ is stale: run python -m netops build and commit" && exit 1)
+
+  lab:
+    name: Deploy the network and verify it on real packets
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m netops build
+      - name: Install Containerlab
+        run: bash -c "$(curl -sL https://get.containerlab.dev)"
+      - name: Deploy
+        working-directory: out
+        run: sudo containerlab deploy -t netops.clab.yml
+      - name: Verify routing, segmentation and failover
+        run: python -m netops lab
+      - name: Router state on failure
+        if: failure()
+        run: |
+          for r in edge core1 core2 isp; do
+            echo "=== $r"; docker exec clab-netops-$r vtysh -c "show ip route" || true
+            docker exec clab-netops-$r sh -c "nft list ruleset" || true
+          done
+      - name: Destroy
+        if: always()
+        working-directory: out
+        run: sudo containerlab destroy -t netops.clab.yml --cleanup
