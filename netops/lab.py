@@ -163,7 +163,7 @@ def failover_drill(site: Site) -> dict:
             break
     after = sh(office, f"traceroute -n -w 1 -q 1 -m 6 {target}").stdout
     sh(office_router, f"ip link set {cut.name} up")
-    reconverge = wait_converged(site)
+    wait_converged(site)
     other_core = next(r for r in site.routers if r not in (office_router, site.edge_router))
     via = str(plan.loopbacks[other_core])
     p2p_other = {str(i.address) for i in ifaces[other_core]}
@@ -173,7 +173,6 @@ def failover_drill(site: Site) -> dict:
         "rerouted_via_other_core": any(ip in after for ip in p2p_other | {via}),
         "path_before": before.strip(),
         "path_after": after.strip(),
-        "restored_in_s": reconverge,
     }
 
 
@@ -190,8 +189,7 @@ def report(results: list[Result], converged_s: float, drill: dict) -> str:
         f"- Flows tested on real packets: **{len(tested)}**; matching the policy: **{len(tested) - len(bad)}**.",
         f"- Failover drill: cut {drill['cut']}. Office lost the internet for "
         + (f"**{drill['outage_s']:.1f} s**" if drill["outage_s"] is not None else "**over 60 s (FAILED)**")
-        + f", rerouted through the other core: **{drill['rerouted_via_other_core']}**; "
-        f"after restoring the link, routing re-converged in {drill['restored_in_s']:.1f} s.",
+        + f", rerouted through the other core: **{drill['rerouted_via_other_core']}**. The link was then restored.",
         "",
         "| From | To | Proto | Port | Policy | Lab | |",
         "|---|---|---|---:|---|---|---|",
