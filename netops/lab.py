@@ -206,10 +206,26 @@ def report(results: list[Result], converged_s: float, drill: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def drop_management_default(site: Site) -> None:
+    """Remove the default route Docker gives every container on its management port.
+
+    Each container has eth0 on Containerlab's management network, with a kernel
+    default route through it. A kernel route has administrative distance 0, so it
+    beats the OSPF default (110) that the edge originates, and the cores would send
+    internet-bound traffic out the management port instead of to the edge. Real
+    networks avoid this with a separate management VRF; the lab simply removes it,
+    after the package install that still needs it.
+    """
+    for r in site.routers:
+        sh(r, "ip route del default dev eth0 2> /dev/null || true")
+    print(f"management default route removed on {', '.join(site.routers)}")
+
+
 def run(site: Site) -> int:
     for r in site.routers:
         sh(r, "sysctl -w net.ipv4.ip_forward=1 > /dev/null")
     load_firewalls(site)
+    drop_management_default(site)
     converged = wait_converged(site)
     print(f"converged in {converged:.1f}s")
     results = reachability(site)
