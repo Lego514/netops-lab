@@ -48,7 +48,9 @@ jobs:
       - name: Router state on failure
         if: failure()
         run: |
+          docker ps --format '{{.Names}}  {{.Status}}'
           for r in edge core1 core2 isp; do
+            echo "=== $r logs"; docker logs --tail 60 clab-netops-$r 2>&1 || true
             echo "=== $r"; docker exec clab-netops-$r vtysh -c "show ip route" || true
             docker exec clab-netops-$r sh -c "nft list ruleset" || true
           done
