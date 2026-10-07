@@ -225,15 +225,51 @@ def drop_management_default(site: Site) -> None:
     print(f"management default route removed on {', '.join(site.routers)}")
 
 
+FRR_DAEMONS = ("zebra", "ospfd", "bgpd", "staticd")
+
+
+def daemon_pids(name: str) -> str:
+    return sh(name, f"pidof {' '.join(FRR_DAEMONS)}").stdout.strip()
+
+
+def restart_frr(site: Site, timeout_s: float = 90) -> None:
+    """Start FRR cleanly once every interface exists.
+
+    The image starts FRR when the container starts, which is before Containerlab
+    wires eth1, eth2, ... In CI that race sometimes crashed zebra while the
+    config loaded; watchfrr then gave up after ~60 s and restarted every daemon
+    in the middle of the tests. Restarting once, after deploy, removes the race.
+    """
+    nodes = (*site.routers, site.isp_name)
+    for n in nodes:
+        sh(n, "/usr/lib/frr/watchfrr.sh restart all > /dev/null 2>&1", timeout=60)
+    start = time.monotonic()
+    while time.monotonic() - start < timeout_s:
+        if all(len(daemon_pids(n).split()) == len(FRR_DAEMONS) for n in nodes):
+            print(f"FRR running on {', '.join(nodes)}")
+            return
+        time.sleep(2)
+    detail = {n: daemon_pids(n) for n in nodes}
+    raise SystemExit(f"FRR daemons did not all start within {timeout_s:.0f}s: {detail}")
+
+
 def run(site: Site) -> int:
     for r in site.routers:
         sh(r, "sysctl -w net.ipv4.ip_forward=1 > /dev/null")
     load_firewalls(site)
+    restart_frr(site)
     drop_management_default(site)
     converged = wait_converged(site)
     print(f"converged in {converged:.1f}s")
+    # If FRR restarts during the tests, the results say nothing about the
+    # policy. Detect it and fail loudly instead of reporting random mismatches.
+    pids_before = {n: daemon_pids(n) for n in (*site.routers, site.isp_name)}
     results = reachability(site)
     drill = failover_drill(site)
+    restarted = [n for n, p in pids_before.items() if daemon_pids(n) != p]
+    if restarted:
+        print(f"FAILED: FRR restarted during the test on {', '.join(restarted)}", file=sys.stderr)
+        return 1
     text = report(results, converged, drill)
     print(text)
     Path("lab-report.md").write_text(text, encoding="utf-8")

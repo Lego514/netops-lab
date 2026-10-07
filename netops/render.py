@@ -34,6 +34,9 @@ staticd_options="-A 127.0.0.1"
 """
 
 
+VTYSH = "service integrated-vtysh-config\n"
+
+
 def nft_rule(r: FwRule) -> str:
     """One FwRule as an nftables rule line."""
     parts: list[str] = []
@@ -140,7 +143,11 @@ def topology(site: Site, plan: Plan, ifaces: dict[str, list[Interface]]) -> dict
     """Containerlab topology. Paths are relative to the output directory."""
     nodes: dict[str, dict] = {}
     for r in (*site.routers, site.isp_name):
-        binds = [f"{r}/daemons:/etc/frr/daemons", f"{r}/frr.conf:/etc/frr/frr.conf"]
+        binds = [
+            f"{r}/daemons:/etc/frr/daemons",
+            f"{r}/frr.conf:/etc/frr/frr.conf",
+            f"{r}/vtysh.conf:/etc/frr/vtysh.conf",
+        ]
         node: dict = {"kind": "linux", "image": FRR_IMAGE, "binds": binds}
         if r in site.routers:
             binds.append(f"{r}/segpolicy.nft:/etc/nftables/segpolicy.nft")
@@ -184,9 +191,11 @@ def build(site: Site, out: Path) -> dict[str, str]:
     for r in site.routers:
         files[f"{r}/frr.conf"] = router_config(site, plan, ifaces, r)
         files[f"{r}/daemons"] = DAEMONS
+        files[f"{r}/vtysh.conf"] = VTYSH
         files[f"{r}/segpolicy.nft"] = firewall_config(r, chains[r], r == site.edge_router)
     files[f"{site.isp_name}/frr.conf"] = isp_config(site, plan, ifaces)
     files[f"{site.isp_name}/daemons"] = DAEMONS
+    files[f"{site.isp_name}/vtysh.conf"] = VTYSH
     files["netops.clab.yml"] = yaml.safe_dump(topology(site, plan, ifaces), sort_keys=False)
     for rel, content in files.items():
         path = out / rel
